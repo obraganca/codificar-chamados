@@ -1,0 +1,101 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - .:/var/www/html
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+      # Laravel -> Reverb (servidor a servidor) usa o nome do servico, nao "localhost".
+      - REVERB_HOST=reverb
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Unico servico que roda composer install/migrate (antes app e reverb
+    # rodavam composer install ao mesmo tempo no mesmo volume).
+    command: sh -c "composer install --no-interaction && php artisan migrate --force && php artisan db:seed --force && php artisan serve --host=0.0.0.0 --port=8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/up"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: chamados
+      MYSQL_USER: chamados
+      MYSQL_PASSWORD: chamados
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3316:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      # Executa uma query real usando as credenciais do ambiente
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  queue-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - .:/var/www/html
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+      - REVERB_HOST=reverb
+    depends_on:
+      app:
+        condition: service_healthy
+    # Este worker envia e-mails E faz o broadcast das notificacoes/chat.
+    command: php artisan queue:work redis --tries=3 --sleep=1 --timeout=60
+
+  reverb:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - .:/var/www/html
+    ports:
+      - "8081:8081"
+    environment:
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+    depends_on:
+      app:
+        condition: service_healthy
+    command: php artisan reverb:start --host=0.0.0.0 --port=8081
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+volumes:
+  mysql_data:

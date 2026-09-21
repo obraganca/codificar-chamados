@@ -1,0 +1,423 @@
+openapi: 3.0.3
+info:
+  title: Chamados API
+  description: >
+    API do Sistema de Controle de Chamados Internos. Este arquivo e a fonte
+    unica de verdade do contrato entre backend e frontend: o frontend gera
+    tipos TypeScript a partir dele (`npm run generate:types`), evitando que os
+    dois times mantenham tipos duplicados e divergentes manualmente.
+  version: "1.0.0"
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+      required: [id, name, email]
+    Responsavel:
+      type: object
+      properties:
+        id: { type: integer }
+        nome: { type: string }
+        email: { type: string, format: email }
+        chamados_abertos_count:
+          type: integer
+          nullable: true
+      required: [id, nome, email]
+    Ticket:
+      type: object
+      properties:
+        id: { type: integer }
+        titulo: { type: string }
+        descricao: { type: string }
+        prioridade: { type: string, enum: [baixa, media, alta] }
+        status: { type: string, enum: [aberto, em_andamento, resolvido, fechado] }
+        aberto_em: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        responsavel_id: { type: integer, nullable: true }
+        responsavel:
+          allOf:
+            - $ref: '#/components/schemas/Responsavel'
+          nullable: true
+                solicitante_id: { type: integer, nullable: true }
+        categoria_id: { type: integer, nullable: true }
+        solicitante:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            name: { type: string }
+        categoria:
+          allOf:
+            - $ref: '#/components/schemas/Categoria'
+          nullable: true
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/Tag' }
+      required: [id, titulo, descricao, prioridade, status]
+    TicketInput:
+      type: object
+      properties:
+        titulo: { type: string, maxLength: 255 }
+        descricao: { type: string }
+        prioridade: { type: string, enum: [baixa, media, alta] }
+        status: { type: string, enum: [aberto, em_andamento, resolvido, fechado] }
+        responsavel_id: { type: integer, nullable: true }
+        atribuicao_automatica:
+          type: boolean
+          description: Se true, ignora responsavel_id e atribui automaticamente quem tem menos chamados em aberto.
+        categoria_id: { type: integer, nullable: true }
+        tag_ids:
+          type: array
+          items: { type: integer }
+      required: [titulo, descricao, prioridade, status]
+    ValidationError:
+      type: object
+      properties:
+        message: { type: string }
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        Categoria:
+      type: object
+      properties:
+        id: { type: integer }
+        nome: { type: string }
+        cor: { type: string }
+      required: [id, nome, cor]
+    Tag:
+      type: object
+      properties:
+        id: { type: integer }
+        nome: { type: string }
+      required: [id, nome]
+    Notificacao:
+      type: object
+      properties:
+        id: { type: string }
+        tipo:
+          type: string
+          enum: [ticket_created, ticket_assigned, ticket_updated, ticket_resolved, ticket_message]
+        titulo: { type: string }
+        mensagem: { type: string }
+        ticket_id: { type: integer, nullable: true }
+        autor:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            name: { type: string }
+        mudancas:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              campo: { type: string }
+              de: { type: string, nullable: true }
+              para: { type: string, nullable: true }
+        lida_em: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+      required: [id, tipo, titulo, mensagem, lida_em, created_at]
+paths:
+  /auth/registrar:
+    post:
+      summary: Cria uma conta e retorna um token de acesso
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                password_confirmation: { type: string, format: password }
+              required: [name, email, password, password_confirmation]
+      responses:
+        '201':
+          description: Conta criada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  token: { type: string }
+        '422':
+          description: Erro de validacao
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+  /auth/login:
+    post:
+      summary: Autentica e retorna um token de acesso
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+              required: [email, password]
+      responses:
+        '200':
+          description: Login realizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  token: { type: string }
+        '422':
+          description: Credenciais invalidas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+  /auth/logout:
+    post:
+      summary: Revoga o token atual
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Logout realizado }
+        '401': { description: Nao autenticado }
+  /auth/me:
+    get:
+      summary: Retorna o usuario autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+        '401': { description: Nao autenticado }
+  /dashboard:
+    get:
+      summary: Indicadores e chamados agrupados por status
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  colunas:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items: { $ref: '#/components/schemas/Ticket' }
+                  responsaveis:
+                    type: array
+                    items: { $ref: '#/components/schemas/Responsavel' }
+                  totais:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      em_aberto: { type: integer }
+                      alta_prioridade: { type: integer }
+                      sem_responsavel: { type: integer }
+  /responsaveis:
+    get:
+      summary: Lista responsaveis com a carga atual de chamados em aberto
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Responsavel' }
+  /chamados:
+    get:
+      summary: Lista chamados (paginado e filtravel)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: prioridade
+          schema: { type: string }
+        - in: query
+          name: responsavel_id
+          schema: { type: integer }
+        - in: query
+          name: busca
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Ticket' }
+                  links: { type: object }
+                  meta: { type: object }
+    post:
+      summary: Cria um chamado
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketInput' }
+      responses:
+        '201':
+          description: Criado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '422':
+          description: Erro de validacao
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+  /chamados/{id}:
+    get:
+      summary: Exibe um chamado
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '404': { description: Nao encontrado }
+    put:
+      summary: Atualiza um chamado
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketInput' }
+      responses:
+        '200':
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '422':
+          description: Erro de validacao
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+    /categorias:
+    get:
+      summary: Lista categorias
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Categoria' }
+  /tags:
+    get:
+      summary: Lista tags
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Tag' }
+  /notificacoes:
+    get:
+      summary: Notificacoes do usuario (mais recentes primeiro)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: nao_lidas
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK (meta.nao_lidas = total de nao lidas)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notificacao' }
+                  meta: { type: object }
+  /notificacoes/{id}/lida:
+    post:
+      summary: Marca uma notificacao como lida
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '404': { description: Nao encontrada }
+  /notificacoes/marcar-todas-lidas:
+    post:
+      summary: Marca todas as notificacoes como lidas
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK }
